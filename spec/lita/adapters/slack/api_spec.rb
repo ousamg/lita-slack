@@ -2,6 +2,9 @@ require "spec_helper"
 
 describe Lita::Adapters::Slack::API do
   subject { described_class.new(config, stubs) }
+  let(:api) { subject }
+  # Stubs are empty by default. Override or call expect_post to add stubs.
+  let(:stubs) { Faraday::Adapter::Test::Stubs.new }
 
   let(:http_status) { 200 }
   let(:token) { 'abcd-1234567890-hWYd21AmMH2UHAkx29vb5c1Y' }
@@ -9,6 +12,58 @@ describe Lita::Adapters::Slack::API do
 
   before do
     config.token = token
+  end
+
+  describe "#call_api" do
+    it "with no arguments sends a POST with just a token" do
+      stubs.post("http://slack.com/api/x.y", token: token) do
+        [200, {}, MultiJson.dump("ok" => true)]
+      end
+      expect(api.call_api("x.y")).to eq("ok" => true)
+    end
+    it "with arguments sends the arguments" do
+      stubs.post("http://slack.com/api/x.y", token: token, a: 1, b: "hi", c: false, d: true) do
+        [200, {}, MultiJson.dump("ok" => true)]
+      end
+      expect(api.call_api("x.y", a: 1, b: "hi", c: false, d: true)).to eq("ok" => true)
+    end
+    it "with nil arguments does not send the arguments" do
+      stubs.post("http://slack.com/api/x.y", token: token, a: 1, c: false) do
+        [200, {}, MultiJson.dump("ok" => true)]
+      end
+      expect(api.call_api("x.y", a: 1, b: nil, c: false)).to eq("ok" => true)
+    end
+    it "with hash arguments, JSON-encodes the arguments" do
+      stubs.post("http://slack.com/api/x.y", token: token, a: %|{"x":1,"y":2}|) do
+        [200, {}, MultiJson.dump("ok" => true)]
+      end
+      expect(api.call_api("x.y", a: {x: 1, y: 2})).to eq("ok" => true)
+    end
+    it "with array arguments, JSON-encodes the arguments" do
+      stubs.post("http://slack.com/api/x.y", token: token, a: %|["x","y"]|) do
+        [200, {}, MultiJson.dump("ok" => true)]
+      end
+      expect(api.call_api("x.y", a: ["x","y"])).to eq("ok" => true)
+    end
+    it "with an array of Attachments, JSON-encodes the attachments" do
+      stubs.post("http://slack.com/api/x.y", token: token, a: %|[{"fallback":"foo","text":"foo"}]|) do
+        [200, {}, MultiJson.dump("ok" => true)]
+      end
+      attachment = Lita::Adapters::Slack::Attachment.new("foo")
+      expect(api.call_api("x.y", a: [attachment])).to eq("ok" => true)
+    end
+    it "when Slack responds with an error, a RuntimeError is thrown" do
+      stubs.post("http://slack.com/api/x.y", token: token) do
+        [200, {}, MultiJson.dump("ok" => false, "error" => "invalid_auth") ]
+      end
+      expect { api.call_api("x.y") }.to raise_error "Slack API call to x.y returned an error: invalid_auth."
+    end
+    it "when Slack responds with non-200, a RuntimeError is thrown" do
+      stubs.post("http://slack.com/api/x.y", token: token) do
+        [422, {}, "failed big time"]
+      end
+      expect { api.call_api("x.y") }.to raise_error "Slack API call to x.y failed with status code 422: 'failed big time'. Headers: {}"
+    end
   end
 
   describe "#im_open" do
@@ -331,249 +386,6 @@ describe Lita::Adapters::Slack::API do
       it "raises a RuntimeError" do
         expect { subject.im_list }.to raise_error(
           "Slack API call to im.list failed with status code 422: ''. Headers: {}"
-        )
-      end
-    end
-  end
-
-  describe "#send_attachments" do
-    let(:attachment) do
-      Lita::Adapters::Slack::Attachment.new(attachment_text)
-    end
-    let(:attachment_text) { "attachment text" }
-    let(:attachment_hash) do
-      {
-        fallback: fallback_text,
-        text: attachment_text,
-      }
-    end
-    let(:fallback_text) { attachment_text }
-    let(:http_response) { MultiJson.dump({ ok: true }) }
-    let(:room) { Lita::Room.new("C1234567890") }
-    let(:stubs) do
-      Faraday::Adapter::Test::Stubs.new do |stub|
-        stub.post(
-          "https://slack.com/api/chat.postMessage",
-          token: token,
-          as_user: true,
-          channel: room.id,
-          attachments: MultiJson.dump([attachment_hash]),
-        ) do
-          [http_status, {}, http_response]
-        end
-      end
-    end
-
-    context "with a simple text attachment" do
-      it "sends the attachment" do
-        response = subject.send_attachments(room, [attachment])
-
-        expect(response['ok']).to be(true)
-      end
-    end
-
-    context "with a different fallback message" do
-      let(:attachment) do
-        Lita::Adapters::Slack::Attachment.new(attachment_text, fallback: fallback_text)
-      end
-      let(:fallback_text) { "fallback text" }
-
-      it "sends the attachment" do
-        response = subject.send_attachments(room, [attachment])
-
-        expect(response['ok']).to be(true)
-      end
-    end
-
-    context "with all the valid options" do
-      let(:attachment) do
-        Lita::Adapters::Slack::Attachment.new(attachment_text, common_hash_data)
-      end
-      let(:attachment_hash) do
-        common_hash_data.merge(fallback: attachment_text, text: attachment_text)
-      end
-      let(:common_hash_data) do
-        {
-          author_icon: "http://example.com/author.jpg",
-          author_link: "http://example.com/author",
-          author_name: "author name",
-          color: "#36a64f",
-          fields: [{
-            title: "priority",
-            value: "high",
-            short: true,
-          }, {
-            title: "super long field title",
-            value: "super long field value",
-            short: false,
-          }],
-          image_url: "http://example.com/image.jpg",
-          pretext: "pretext",
-          thumb_url: "http://example.com/thumb.jpg",
-          title: "title",
-          title_link: "http://example.com/title",
-        }
-      end
-
-      it "sends the attachment" do
-        response = subject.send_attachments(room, [attachment])
-
-        expect(response['ok']).to be(true)
-      end
-    end
-
-    context "with a Slack error" do
-      let(:http_response) do
-        MultiJson.dump({
-          ok: false,
-          error: 'invalid_auth'
-        })
-      end
-
-      it "raises a RuntimeError" do
-        expect { subject.send_attachments(room, [attachment]) }.to raise_error(
-          "Slack API call to chat.postMessage returned an error: invalid_auth."
-        )
-      end
-    end
-
-    context "with an HTTP error" do
-      let(:http_status) { 422 }
-      let(:http_response) { '' }
-
-      it "raises a RuntimeError" do
-        expect { subject.send_attachments(room, [attachment]) }.to raise_error(
-          "Slack API call to chat.postMessage failed with status code 422: ''. Headers: {}"
-        )
-      end
-    end
-  end
-
-  describe "#send_messages" do
-    let(:messages) { ["attachment text"] }
-    let(:http_response) { MultiJson.dump({ ok: true }) }
-    let(:room) { "C1234567890" }
-    let(:stubs) do
-      Faraday::Adapter::Test::Stubs.new do |stub|
-        stub.post(
-          "https://slack.com/api/chat.postMessage",
-          token: token,
-          as_user: true,
-          channel: room,
-          text: messages.join("\n"),
-        ) do
-          [http_status, {}, http_response]
-        end
-      end
-    end
-
-    context "with a simple text attachment" do
-      it "sends the attachment" do
-        response = subject.send_messages(room, messages)
-
-        expect(response['ok']).to be(true)
-      end
-    end
-
-    context "with configuration" do
-      before do
-        allow(config).to receive(:link_names).and_return(true)
-      end
-
-      def stubs(postMessage_options = {})
-        Faraday::Adapter::Test::Stubs.new do |stub|
-          stub.post(
-            "https://slack.com/api/chat.postMessage",
-            token: token,
-            link_names: 1,
-            as_user: true,
-            channel: room,
-            text: messages.join("\n"),
-          ) do
-            [http_status, {}, http_response]
-          end
-        end
-      end
-
-      it "sends the message with configuration" do
-        response = subject.send_messages(room, messages)
-
-        expect(response['ok']).to be(true)
-      end
-    end
-
-    context "with a different fallback message" do
-      let(:attachment) do
-        Lita::Adapters::Slack::Attachment.new(attachment_text, fallback: fallback_text)
-      end
-      let(:fallback_text) { "fallback text" }
-
-      it "sends the attachment" do
-        response = subject.send_messages(room, messages)
-
-        expect(response['ok']).to be(true)
-      end
-    end
-
-    context "with all the valid options" do
-      let(:attachment) do
-        Lita::Adapters::Slack::Attachment.new(attachment_text, common_hash_data)
-      end
-      let(:attachment_hash) do
-        common_hash_data.merge(fallback: attachment_text, text: attachment_text)
-      end
-      let(:common_hash_data) do
-        {
-          author_icon: "http://example.com/author.jpg",
-          author_link: "http://example.com/author",
-          author_name: "author name",
-          color: "#36a64f",
-          fields: [{
-            title: "priority",
-            value: "high",
-            short: true,
-          }, {
-            title: "super long field title",
-            value: "super long field value",
-            short: false,
-          }],
-          image_url: "http://example.com/image.jpg",
-          pretext: "pretext",
-          thumb_url: "http://example.com/thumb.jpg",
-          title: "title",
-          title_link: "http://example.com/title",
-        }
-      end
-
-      it "sends the attachment" do
-        response = subject.send_messages(room, messages)
-
-        expect(response['ok']).to be(true)
-      end
-    end
-
-    context "with a Slack error" do
-      let(:http_response) do
-        MultiJson.dump({
-          ok: false,
-          error: 'invalid_auth'
-        })
-      end
-
-      it "raises a RuntimeError" do
-        expect { subject.send_messages(room, messages) }.to raise_error(
-          "Slack API call to chat.postMessage returned an error: invalid_auth."
-        )
-      end
-    end
-
-    context "with an HTTP error" do
-      let(:http_status) { 422 }
-      let(:http_response) { '' }
-
-      it "raises a RuntimeError" do
-        expect { subject.send_messages(room, messages) }.to raise_error(
-          "Slack API call to chat.postMessage failed with status code 422: ''. Headers: {}"
         )
       end
     end

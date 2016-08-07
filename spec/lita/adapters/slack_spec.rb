@@ -1,21 +1,22 @@
 require "spec_helper"
+require "support/expect_api_call"
 
 describe Lita::Adapters::Slack, lita: true do
   subject { described_class.new(robot) }
 
   let(:robot) { Lita::Robot.new(registry) }
   let(:rtm_connection) { instance_double('Lita::Adapters::Slack::RTMConnection') }
-  let(:token) { 'abcd-1234567890-hWYd21AmMH2UHAkx29vb5c1Y' }
 
   before do
     registry.register_adapter(:slack, described_class)
-    registry.config.adapters.slack.token = token
 
     allow(
       described_class::RTMConnection
     ).to receive(:build).with(robot, subject.config).and_return(rtm_connection)
     allow(rtm_connection).to receive(:run)
   end
+
+  include ExpectApiCall
 
   it "registers with Lita" do
     expect(Lita.adapters[:slack]).to eql(described_class)
@@ -66,7 +67,7 @@ describe Lita::Adapters::Slack, lita: true do
       end
 
       it "returns UID(s)" do
-        expect(subject).to receive(:channel_roster).with(room_source.room_object.id, api)
+        expect(subject).to receive(:channel_roster).with(room_source.room_object.id)
 
         subject.roster(room_source.room_object)
       end
@@ -87,8 +88,8 @@ describe Lita::Adapters::Slack, lita: true do
       end
 
       it "returns UID(s)" do
-        expect(subject).to receive(:group_roster).with(room_source.room_object.id, api).and_return(%q{})
-        expect(subject).to receive(:mpim_roster).with(room_source.room_object.id, api).and_return(%q{G024BE91L})
+        expect(subject).to receive(:group_roster).with(room_source.room_object.id).and_return(%q{})
+        expect(subject).to receive(:mpim_roster).with(room_source.room_object.id).and_return(%q{G024BE91L})
 
         subject.roster(room_source.room_object)
       end
@@ -109,7 +110,7 @@ describe Lita::Adapters::Slack, lita: true do
       end
 
       it "returns UID" do
-        expect(subject).to receive(:im_roster).with(room_source.room_object.id, api)
+        expect(subject).to receive(:im_roster).with(room_source.room_object.id)
 
         subject.roster(room_source.room_object)
       end
@@ -125,17 +126,32 @@ describe Lita::Adapters::Slack, lita: true do
     end
 
     describe "via the Web API" do
-      let(:api) { instance_double('Lita::Adapters::Slack::API') }
-
-      before do
-        allow(Lita::Adapters::Slack::API).to receive(:new).with(subject.config).and_return(api)
-      end
-
-      it "does not send via the RTM api" do
+      it "sends via the non-RTM API" do
         expect(rtm_connection).to_not receive(:send_messages)
-        expect(api).to receive(:send_messages).with(room_source.room, ['foo'])
+        expect_api_call("chat.postMessage", channel: room_source.room, text: 'foo')
 
         subject.send_messages(room_source, ['foo'])
+      end
+
+      context "with parse, link_names, unfurl_media and unfurl_links configured" do
+        before do
+          registry.config.adapters.slack.parse = "none"
+          registry.config.adapters.slack.link_names = true
+          registry.config.adapters.slack.unfurl_media = true
+          registry.config.adapters.slack.unfurl_links = true
+        end
+
+        it "sends those arguments alongside messages" do
+          expect_api_call("chat.postMessage",
+            channel: room_source.room,
+            text: 'foo',
+            parse: "none",
+            link_names: 1,
+            unfurl_media: true,
+            unfurl_links: true
+          )
+          subject.send_messages(room_source, ['foo'])
+        end
       end
     end
   end
