@@ -1,4 +1,8 @@
 require 'lita/adapters/slack/chat_service'
+require 'lita/adapters/slack/team_data'
+require 'lita/adapters/slack/slack_im'
+require 'lita/adapters/slack/slack_user'
+require 'lita/adapters/slack/slack_channel'
 require 'lita/adapters/slack/rtm_connection'
 require 'forwardable'
 
@@ -50,7 +54,7 @@ module Lita
         arguments[:link_names] = config.link_names ? 1 : 0 unless config.link_names.nil?
         arguments[:unfurl_links] = config.unfurl_links unless config.unfurl_links.nil?
         arguments[:unfurl_media] = config.unfurl_media unless config.unfurl_media.nil?
-        api.call_api("chat.postMessage", channel: api.channel_for(target), text: Array(strings).join("\n"), **arguments)
+        api.call_api("chat.postMessage", channel: channel_for(target), text: Array(strings).join("\n"), **arguments)
       end
 
       def set_topic(target, topic)
@@ -73,6 +77,23 @@ module Lita
       end
 
       attr_reader :rtm_connection
+
+      def channel_for(target)
+        case target
+        when Lita::Source
+          if target.private_message?
+            rtm_connection.im_for(target.user.id)
+          else
+            target.room
+          end
+
+        when Lita::Room, Lita::User
+          target.id
+
+        else
+          target
+        end
+      end
 
       def channel_roster(room_id)
         response = api.channels_info room_id
